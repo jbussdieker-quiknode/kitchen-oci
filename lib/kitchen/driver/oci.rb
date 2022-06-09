@@ -35,12 +35,13 @@ module Kitchen
     # @author Stephen Pearson <stephen.pearson@oracle.com>
     class Oci < Kitchen::Driver::Base # rubocop:disable Metrics/ClassLength
       # required config items
-      required_config :compartment_id
       required_config :availability_domain
       required_config :shape
       required_config :subnet_id
 
       # common config items
+      default_config :compartment_id, nil
+      default_config :compartment_name, nil
       default_config :instance_type, 'compute'
       default_config :hostname_prefix, nil
       default_keypath = File.expand_path(File.join(%w[~ .ssh id_rsa.pub]))
@@ -122,6 +123,24 @@ module Kitchen
 
       private
 
+      def compartment_id
+        return config[:compartment_id] if config[:compartment_id]
+        raise 'must specify either compartment_id or compartment_name' unless config[:compartment_name]
+        ident_api.list_compartments(tenancy).data.find do |item|
+          return item.id if item.name == config[:compartment_name]
+        end
+        raise 'compartment not found'
+      end
+
+      def tenancy
+        if config[:use_instance_principals]
+          sign = OCI::Auth::Signers::InstancePrincipalsSecurityTokenSigner.new
+          sign.instance_variable_get '@tenancy_id'
+        else
+          oci_config.tenancy
+        end
+      end
+
       def instance_type
         raise 'instance_type must be either compute or dbaas!' unless %w[compute dbaas].include?(config[:instance_type].downcase)
 
@@ -185,6 +204,10 @@ module Kitchen
 
       def dbaas_api
         generic_api(OCI::Database::DatabaseClient)
+      end
+
+      def ident_api
+        generic_api(OCI::Identity::IdentityClient)
       end
 
       ##################
@@ -291,7 +314,7 @@ module Kitchen
         OCI::Core::Models::LaunchInstanceDetails.new.tap do |l|
           hostname = generate_hostname
           l.availability_domain = config[:availability_domain]
-          l.compartment_id = config[:compartment_id]
+          l.compartment_id = compartment_id
           l.display_name = hostname
           l.source_details = instance_source_details
           l.shape = config[:shape]
@@ -343,7 +366,7 @@ module Kitchen
 
       def vnic_attachments(instance_id)
         att = comp_api.list_vnic_attachments(
-          config[:compartment_id],
+          compartment_id,
           instance_id: instance_id
         ).data
 
@@ -441,7 +464,7 @@ module Kitchen
 
         OCI::Database::Models::LaunchDbSystemDetails.new.tap do |l|
           l.availability_domain = config[:availability_domain]
-          l.compartment_id = config[:compartment_id]
+          l.compartment_id = compartment_id
           l.cpu_core_count = cpu_core_count
           l.database_edition = database_edition
           l.db_home = create_db_home_details
@@ -504,7 +527,7 @@ module Kitchen
 
       def dbaas_node(instance_id)
         dbaas_api.list_db_nodes(
-          config[:compartment_id],
+          compartment_id,
           db_system_id: instance_id
         ).data
       end
