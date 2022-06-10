@@ -81,28 +81,7 @@ module Kitchen
 
         instance.transport.connection(state).wait_until_ready
 
-        for volume in state.fetch(:volumes, []) do
-          resp = comp_api.attach_volume(OCI::Core::Models::AttachVolumeDetails.new(
-            type: 'iscsi',
-            volume_id: volume[:volume_id],
-            instance_id: instance_id,
-          ))
-          raise 'failed to attach volume' if resp.status != 200
-          volume_attachment_id = resp.data.id
-          volume[:volume_attachment_id] = volume_attachment_id
-        end
-
-        for volume in state.fetch(:volumes, []) do
-          volume_attachment = comp_api.get_volume_attachment(volume[:volume_attachment_id]).wait_until(
-            :lifecycle_state,
-            OCI::Core::Models::VolumeAttachment::LIFECYCLE_STATE_ATTACHED
-          ).data
-          iqn = volume_attachment.iqn
-          portal = "#{volume_attachment.ipv4}:#{volume_attachment.port}"
-          instance.transport.connection(state).execute("sudo iscsiadm -m node -o new -T #{iqn} -p #{portal}")
-          instance.transport.connection(state).execute("sudo iscsiadm -m node -o update -T #{iqn} -n node.startup -v automatic")
-          instance.transport.connection(state).execute("sudo iscsiadm -m node -T #{iqn} -p #{portal} -l")
-        end
+        state = attach_volumes(state)
 
         return unless config[:post_create_script]
 
@@ -324,10 +303,9 @@ module Kitchen
       # Volume methods #
       ##################
       def create_volumes(state)
-        #info('Creating volumes') if config.fetch(:volumes, []).length > 0
+        info('Creating volumes') if config.fetch(:volumes, []).length > 0
         state[:volumes] = []
         for volume in config[:volumes] do
-          #info("create volume")
           raise 'volume type is a required parameter' if not volume.fetch(:type, nil)
           raise "unknown volume type #{volume[:type]}" if not volume[:type] == "volumeBackup"
           raise 'display_name is a required parameter' if not volume.fetch(:display_name, nil)
@@ -350,7 +328,6 @@ module Kitchen
         end
 
         for volume in state[:volumes] do
-          #info("create volume wait")
           bs_api.get_volume(volume[:volume_id]).wait_until(
             :lifecycle_state,
             OCI::Core::Models::Volume::LIFECYCLE_STATE_AVAILABLE
@@ -359,11 +336,38 @@ module Kitchen
         state
       end
 
+      def attach_volumes(state)
+        info('Attaching volumes') if config.fetch(:volumes, []).length > 0
+        for volume in state.fetch(:volumes, []) do
+          resp = comp_api.attach_volume(OCI::Core::Models::AttachVolumeDetails.new(
+            type: 'iscsi',
+            volume_id: volume[:volume_id],
+            instance_id: state[:server_id],
+          ))
+          raise 'failed to attach volume' if resp.status != 200
+          volume_attachment_id = resp.data.id
+          volume[:volume_attachment_id] = volume_attachment_id
+        end
+
+        for volume in state.fetch(:volumes, []) do
+          volume_attachment = comp_api.get_volume_attachment(volume[:volume_attachment_id]).wait_until(
+            :lifecycle_state,
+            OCI::Core::Models::VolumeAttachment::LIFECYCLE_STATE_ATTACHED
+          ).data
+          iqn = volume_attachment.iqn
+          portal = "#{volume_attachment.ipv4}:#{volume_attachment.port}"
+          instance.transport.connection(state).execute("sudo iscsiadm -m node -o new -T #{iqn} -p #{portal}")
+          instance.transport.connection(state).execute("sudo iscsiadm -m node -o update -T #{iqn} -n node.startup -v automatic")
+          instance.transport.connection(state).execute("sudo iscsiadm -m node -T #{iqn} -p #{portal} -l")
+        end
+        state
+      end
+
       def detach_volumes(state)
+        info('Detaching volumes') if config.fetch(:volumes, []).length > 0
         for volume in state.fetch(:volumes, []) do
           next if not volume.fetch(:volume_attachment_id, nil)
           resp = comp_api.detach_volume(volume[:volume_attachment_id])
-          #info("weird") if resp.status == 204
           raise 'failed to detach volume' if (resp.status != 200 and resp.status != 204)
           comp_api.get_volume_attachment(volume[:volume_attachment_id]).wait_until(
             :lifecycle_state,
@@ -375,9 +379,9 @@ module Kitchen
       end
 
       def delete_volumes(state)
+        info('Deleting volumes') if config.fetch(:volumes, []).length > 0
         for volume in state.fetch(:volumes, []) do
           resp = bs_api.delete_volume(volume[:volume_id])
-          #info("weird") if resp.status == 204
           raise 'failed to delete volume' if (resp.status != 200 and resp.status != 204)
         end
         state
