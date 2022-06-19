@@ -306,22 +306,30 @@ module Kitchen
         info('Creating volumes') if config.fetch(:volumes, []).length > 0
         state[:volumes] = []
         for volume in config[:volumes] do
-          raise 'volume type is a required parameter' if not volume.fetch(:type, nil)
-          raise "unknown volume type #{volume[:type]}" if not volume[:type] == "volumeBackup"
-          raise 'display_name is a required parameter' if not volume.fetch(:display_name, nil)
           cid = compartment_id(volume, tenancy)
-          resp = bs_api.list_volume_backups(cid, volume)
-          raise 'failed to list volume backups' if resp.status != 200
-          raise 'volume_backup not found' if not resp.data.length > 0
-          volume_backup_id = resp.data[0].id
-          resp = bs_api.create_volume(OCI::Core::Models::CreateVolumeDetails.new(
+
+          create_volume_config = {
             display_name: "test-kitchen-created",
             compartment_id: compartment_id,
             availability_domain: config[:availability_domain],
-            source_details: OCI::Core::Models::VolumeSourceFromVolumeBackupDetails.new(
+          }
+
+          if volume.fetch(:type, nil) == "volumeBackup"
+            raise 'display_name is a required parameter' if not volume.fetch(:display_name, nil)
+            resp = bs_api.list_volume_backups(cid, volume)
+            raise 'failed to list volume backups' if resp.status != 200
+            raise 'volume_backup not found' if not resp.data.length > 0
+            volume_backup_id = resp.data[0].id
+            create_volume_config[:source_details] = OCI::Core::Models::VolumeSourceFromVolumeBackupDetails.new(
               id: volume_backup_id
-            ),
-          ))
+            )
+          else
+            raise 'size_in_gbs is a required parameter unless type is volumeBackup' if not volume.fetch(:size_in_gbs, nil)
+            create_volume_config[:size_in_gbs] = volume[:size_in_gbs]
+          end
+
+          resp = bs_api.create_volume(OCI::Core::Models::CreateVolumeDetails.new(create_volume_config))
+
           raise 'failed to create volume from backup' if resp.status != 200
           volume_id = resp.data.id
           state[:volumes].push({volume_id: volume_id})
