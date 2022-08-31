@@ -309,7 +309,7 @@ module Kitchen
           cid = compartment_id(volume, tenancy)
 
           create_volume_config = {
-            display_name: "test-kitchen-created",
+            display_name: volume.fetch(:name, "test-kitchen-created"),
             compartment_id: compartment_id,
             availability_domain: config[:availability_domain],
           }
